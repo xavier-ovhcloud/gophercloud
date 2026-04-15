@@ -151,5 +151,112 @@ Example to Validate a Token Created with Application Credentials Access Rules
 	if ok {
 		fmt.Println("Token is valid")
 	}
+
+# OIDC Federation Authentication
+
+This package also supports OIDC federation authentication via Keystone's
+OS-FEDERATION API. Four flows are available:
+
+Example to Authenticate with OIDC Client Credentials
+
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
+			IdentityEndpoint:  "https://keystone.example.com/v3",
+			IdentityProvider:  "my-idp",
+			Protocol:          "openid",
+			DiscoveryEndpoint: "https://idp.example.com/.well-known/openid-configuration",
+			ClientID:          "my-client-id",
+			ClientSecret:      "my-client-secret",
+			ProjectID:         "project-id",
+		},
+	}
+
+	providerClient, err := auth.AuthenticatedClient(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+
+Example to Authenticate with OIDC Password Grant
+
+	auth := &tokens.OidcPassword{
+		OIDCBase: tokens.OIDCBase{
+			IdentityEndpoint: "https://keystone.example.com/v3",
+			IdentityProvider: "my-idp",
+			Protocol:         "openid",
+			TokenEndpoint:    "https://idp.example.com/token",
+			ClientID:         "my-client-id",
+			ClientSecret:     "my-client-secret",
+			ProjectID:        "project-id",
+		},
+		Username: "user",
+		Password: "pass",
+	}
+
+	providerClient, err := auth.AuthenticatedClient(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+
+Example to Authenticate with a Pre-obtained OIDC Access Token
+
+	auth := &tokens.OidcAccessToken{
+		OIDCBase: tokens.OIDCBase{
+			IdentityEndpoint: "https://keystone.example.com/v3",
+			IdentityProvider: "my-idp",
+			Protocol:         "openid",
+			ProjectID:        "project-id",
+		},
+		Token: "my-oidc-access-token",
+	}
+
+	providerClient, err := auth.AuthenticatedClient(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+
+Example to Authenticate with OIDC Authorization Code
+
+	auth := &tokens.OidcAuthorizationCode{
+		OIDCBase: tokens.OIDCBase{
+			IdentityEndpoint: "https://keystone.example.com/v3",
+			IdentityProvider: "my-idp",
+			Protocol:         "openid",
+			TokenEndpoint:    "https://idp.example.com/token",
+			ClientID:         "my-client-id",
+			ClientSecret:     "my-client-secret",
+			ProjectID:        "project-id",
+		},
+		Code:        "authorization-code",
+		RedirectURI: "https://myapp.example.com/callback",
+	}
+
+	providerClient, err := auth.AuthenticatedClient(context.TODO())
+	if err != nil {
+		panic(err)
+	}
+
+Example to Use id_token Instead of access_token
+
+Some identity providers (e.g. OVHcloud IAM) require using the id_token
+rather than the access_token when authenticating with Keystone. Set
+AccessTokenType to AccessTokenTypeID:
+
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
+			IdentityEndpoint: "https://keystone.example.com/v3",
+			IdentityProvider: "my-idp",
+			Protocol:         "openid",
+			TokenEndpoint:    "https://idp.example.com/token",
+			ClientID:         "my-client-id",
+			ClientSecret:     "my-client-secret",
+			ProjectID:        "project-id",
+			AccessTokenType:  tokens.AccessTokenTypeID,
+		},
+	}
+
+	providerClient, err := auth.AuthenticatedClient(context.TODO())
+	if err != nil {
+		panic(err)
+	}
 */
 package tokens

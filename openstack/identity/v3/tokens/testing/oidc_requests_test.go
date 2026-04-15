@@ -1,4 +1,4 @@
-package tokens
+package testing
 
 import (
 	"context"
@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokens"
+	th "github.com/gophercloud/gophercloud/v2/testhelper"
 )
 
 // ---------------------------------------------------------------------------
@@ -34,29 +37,19 @@ func fakeIDPServer(t *testing.T, grantType string, extraChecks func(r *http.Requ
 	})
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad form", http.StatusBadRequest)
-			return
-		}
-		if gt := r.FormValue("grant_type"); gt != grantType {
-			http.Error(w, "wrong grant_type: "+gt, http.StatusBadRequest)
-			return
-		}
+		th.TestMethod(t, r, http.MethodPost)
+
+		err := r.ParseForm()
+		th.AssertNoErr(t, err)
+
+		th.AssertEquals(t, grantType, r.FormValue("grant_type"))
+
 		if extraChecks != nil {
 			extraChecks(r)
 		}
-		resp := map[string]interface{}{
-			"access_token": "fake-access-token",
-			"id_token":     "fake-id-token",
-			"token_type":   "Bearer",
-			"expires_in":   3600,
-		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(OIDCTokenOutput))
 	})
 
 	return httptest.NewServer(mux)
@@ -80,22 +73,16 @@ func fakeKeystoneServer(t *testing.T) *httptest.Server {
 		}
 		w.Header().Set("X-Subject-Token", "fake-unscoped-token")
 		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(KeystoneFederationOutput))
 	})
 
 	// Token scoping endpoint
 	mux.HandleFunc("/auth/tokens", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+		th.TestMethod(t, r, http.MethodPost)
+
 		w.Header().Set("X-Subject-Token", "fake-scoped-token")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"token": map[string]interface{}{
-				"methods":    []string{"token"},
-				"expires_at": "2099-01-01T00:00:00.000000Z",
-			},
-		})
+		_, _ = w.Write([]byte(KeystoneScopedTokenOutput))
 	})
 
 	return httptest.NewServer(mux)
@@ -107,20 +94,16 @@ func fakeKeystoneServer(t *testing.T) *httptest.Server {
 
 func TestOidcClientCredentials_GetToken_WithDiscovery(t *testing.T) {
 	idp := fakeIDPServer(t, "client_credentials", func(r *http.Request) {
-		if r.FormValue("client_id") != "my-client" {
-			t.Errorf("expected client_id=my-client, got %s", r.FormValue("client_id"))
-		}
-		if r.FormValue("client_secret") != "my-secret" {
-			t.Errorf("expected client_secret=my-secret, got %s", r.FormValue("client_secret"))
-		}
+		th.AssertEquals(t, "my-client", r.FormValue("client_id"))
+		th.AssertEquals(t, "my-secret", r.FormValue("client_secret"))
 	})
 	defer idp.Close()
 
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	auth := &OidcClientCredentials{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint:  ks.URL,
 			IdentityProvider:  "test-idp",
 			Protocol:          "openid",
@@ -128,17 +111,13 @@ func TestOidcClientCredentials_GetToken_WithDiscovery(t *testing.T) {
 			ClientID:          "my-client",
 			ClientSecret:      "my-secret",
 			ProjectID:         "test-project-id",
-			AccessTokenType:   AccessTokenTypeAccess,
+			AccessTokenType:   tokens.AccessTokenTypeAccess,
 		},
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-scoped-token" {
-		t.Errorf("expected fake-scoped-token, got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-scoped-token", token)
 }
 
 func TestOidcClientCredentials_GetToken_WithTokenEndpoint(t *testing.T) {
@@ -148,12 +127,12 @@ func TestOidcClientCredentials_GetToken_WithTokenEndpoint(t *testing.T) {
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	auth := &OidcClientCredentials{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: ks.URL,
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
-			TokenEndpoint:    idp.URL + "/token", // skip discovery
+			TokenEndpoint:    idp.URL + "/token",
 			ClientID:         "my-client",
 			ClientSecret:     "my-secret",
 			ProjectID:        "test-project-id",
@@ -161,12 +140,8 @@ func TestOidcClientCredentials_GetToken_WithTokenEndpoint(t *testing.T) {
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-scoped-token" {
-		t.Errorf("expected fake-scoped-token, got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-scoped-token", token)
 }
 
 func TestOidcClientCredentials_GetToken_IDToken(t *testing.T) {
@@ -176,8 +151,8 @@ func TestOidcClientCredentials_GetToken_IDToken(t *testing.T) {
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	auth := &OidcClientCredentials{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: ks.URL,
 			IdentityProvider: "ovhcloud-emea",
 			Protocol:         "openid",
@@ -185,17 +160,13 @@ func TestOidcClientCredentials_GetToken_IDToken(t *testing.T) {
 			ClientID:         "my-client",
 			ClientSecret:     "my-secret",
 			ProjectID:        "ovh-project-id",
-			AccessTokenType:  AccessTokenTypeID, // OVHcloud requires id_token
+			AccessTokenType:  tokens.AccessTokenTypeID,
 		},
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-scoped-token" {
-		t.Errorf("expected fake-scoped-token, got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-scoped-token", token)
 }
 
 func TestOidcClientCredentials_UnscopedToken(t *testing.T) {
@@ -205,44 +176,35 @@ func TestOidcClientCredentials_UnscopedToken(t *testing.T) {
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	// No ProjectID, DomainID → should return unscoped token
-	auth := &OidcClientCredentials{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: ks.URL,
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
 			TokenEndpoint:    idp.URL + "/token",
 			ClientID:         "my-client",
 			ClientSecret:     "my-secret",
-			// no scope fields
 		},
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-unscoped-token" {
-		t.Errorf("expected fake-unscoped-token (no scope set), got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-unscoped-token", token)
 }
 
 func TestOidcClientCredentials_MissingDiscoveryAndEndpoint(t *testing.T) {
-	auth := &OidcClientCredentials{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcClientCredentials{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: "https://keystone.example.com/v3",
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
 			ClientID:         "my-client",
 			ClientSecret:     "my-secret",
-			// neither DiscoveryEndpoint nor TokenEndpoint set
 		},
 	}
 
 	_, err := auth.GetToken(context.Background())
-	if err == nil {
-		t.Fatal("expected error when neither DiscoveryEndpoint nor TokenEndpoint is set")
-	}
+	th.AssertErr(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -251,20 +213,16 @@ func TestOidcClientCredentials_MissingDiscoveryAndEndpoint(t *testing.T) {
 
 func TestOidcPassword_GetToken(t *testing.T) {
 	idp := fakeIDPServer(t, "password", func(r *http.Request) {
-		if r.FormValue("username") != "alice" {
-			t.Errorf("expected username=alice, got %s", r.FormValue("username"))
-		}
-		if r.FormValue("password") != "s3cr3t" {
-			t.Errorf("expected password=s3cr3t, got %s", r.FormValue("password"))
-		}
+		th.AssertEquals(t, "alice", r.FormValue("username"))
+		th.AssertEquals(t, "s3cr3t", r.FormValue("password"))
 	})
 	defer idp.Close()
 
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	auth := &OidcPassword{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcPassword{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: ks.URL,
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
@@ -278,12 +236,8 @@ func TestOidcPassword_GetToken(t *testing.T) {
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-scoped-token" {
-		t.Errorf("expected fake-scoped-token, got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-scoped-token", token)
 }
 
 // ---------------------------------------------------------------------------
@@ -294,8 +248,8 @@ func TestOidcAccessToken_GetToken(t *testing.T) {
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	auth := &OidcAccessToken{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcAccessToken{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: ks.URL,
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
@@ -305,28 +259,21 @@ func TestOidcAccessToken_GetToken(t *testing.T) {
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-scoped-token" {
-		t.Errorf("expected fake-scoped-token, got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-scoped-token", token)
 }
 
 func TestOidcAccessToken_MissingToken(t *testing.T) {
-	auth := &OidcAccessToken{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcAccessToken{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: "https://keystone.example.com/v3",
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
 		},
-		// Token intentionally empty
 	}
 
 	_, err := auth.GetToken(context.Background())
-	if err == nil {
-		t.Fatal("expected error when Token is empty")
-	}
+	th.AssertErr(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,20 +282,16 @@ func TestOidcAccessToken_MissingToken(t *testing.T) {
 
 func TestOidcAuthorizationCode_GetToken(t *testing.T) {
 	idp := fakeIDPServer(t, "authorization_code", func(r *http.Request) {
-		if r.FormValue("code") != "auth-code-xyz" {
-			t.Errorf("expected code=auth-code-xyz, got %s", r.FormValue("code"))
-		}
-		if r.FormValue("redirect_uri") != "https://myapp.example.com/callback" {
-			t.Errorf("unexpected redirect_uri: %s", r.FormValue("redirect_uri"))
-		}
+		th.AssertEquals(t, "auth-code-xyz", r.FormValue("code"))
+		th.AssertEquals(t, "https://myapp.example.com/callback", r.FormValue("redirect_uri"))
 	})
 	defer idp.Close()
 
 	ks := fakeKeystoneServer(t)
 	defer ks.Close()
 
-	auth := &OidcAuthorizationCode{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcAuthorizationCode{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: ks.URL,
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
@@ -362,17 +305,13 @@ func TestOidcAuthorizationCode_GetToken(t *testing.T) {
 	}
 
 	token, err := auth.GetToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetToken() error: %v", err)
-	}
-	if token != "fake-scoped-token" {
-		t.Errorf("expected fake-scoped-token, got %s", token)
-	}
+	th.AssertNoErr(t, err)
+	th.AssertEquals(t, "fake-scoped-token", token)
 }
 
 func TestOidcAuthorizationCode_MissingCode(t *testing.T) {
-	auth := &OidcAuthorizationCode{
-		OIDCBase: OIDCBase{
+	auth := &tokens.OidcAuthorizationCode{
+		OIDCBase: tokens.OIDCBase{
 			IdentityEndpoint: "https://keystone.example.com/v3",
 			IdentityProvider: "test-idp",
 			Protocol:         "openid",
@@ -380,32 +319,8 @@ func TestOidcAuthorizationCode_MissingCode(t *testing.T) {
 			ClientID:         "my-client",
 			ClientSecret:     "my-secret",
 		},
-		// Code intentionally empty
 	}
 
 	_, err := auth.GetToken(context.Background())
-	if err == nil {
-		t.Fatal("expected error when Code is empty")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Scopes default
-// ---------------------------------------------------------------------------
-
-func TestOIDCBase_DefaultScope(t *testing.T) {
-	base := &OIDCBase{}
-	if s := base.scopes(); s != "openid" {
-		t.Errorf("expected default scope 'openid', got %q", s)
-	}
-}
-
-func TestOIDCBase_CustomScopes(t *testing.T) {
-	base := &OIDCBase{
-		Scopes: []string{"openid", "profile", "email", "publicCloudProject/all"},
-	}
-	expected := "openid profile email publicCloudProject/all"
-	if s := base.scopes(); s != expected {
-		t.Errorf("expected %q, got %q", expected, s)
-	}
+	th.AssertErr(t, err)
 }

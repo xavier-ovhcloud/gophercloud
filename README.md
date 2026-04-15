@@ -37,8 +37,8 @@ You will need to retrieve the following:
 
 * A valid Keystone identity URL
 * Credentials. These can be a username/password combo, a set of Application
-  Credentials, a pre-generated token, or any other supported authentication
-  mechanism.
+  Credentials, a pre-generated token, OIDC federation tokens, or any other
+  supported authentication mechanism.
 
 For users who have the OpenStack dashboard installed, there's a shortcut. If
 you visit the `project/api_access` path in Horizon and click on the
